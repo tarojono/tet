@@ -1,7 +1,473 @@
-<div class="card">
-  <div class="row">
-    <div class="btn" id="bgmToggle">BGM ♪</div>
-    <input id="bgmVol" type="range" min="0" max="1" step="0.01" value="0.3" style="flex:1">
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no" />
+<title>Canvas Tetris - High Quality Single File</title>
+<style>
+  :root { --bg:#0e0f13; --panel:#171922; --text:#e7eaf3; --accent:#66d9ef; --muted:#9aa3b2; }
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}
+  #wrap{display:flex;gap:12px;max-width:1000px;margin:0 auto;padding:12px;box-sizing:border-box;}
+  canvas{background:#0b0c10;border:1px solid #222;border-radius:6px;image-rendering:pixelated;}
+  #side{flex:1;min-width:240px;display:flex;flex-direction:column;gap:12px}
+  .card{background:var(--panel);border:1px solid #222;border-radius:8px;padding:10px}
+  h1{margin:0 0 6px;font-size:18px;letter-spacing:.3px}
+  .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:8px}
+  .btn{background:#202433;border:1px solid #2b3145;border-radius:8px;padding:10px;text-align:center;color:var(--text);font-weight:600;user-select:none}
+  .btn:active{filter:brightness(1.2)}
+  #touch{display:none}
+  .k{color:var(--muted);font-size:12px}
+  .row{display:flex;gap:8px}
+  .mini{display:flex;gap:8px}
+  .pill{display:inline-block;background:#1b1e29;border:1px solid #2a2f45;border-radius:9999px;padding:4px 8px;margin-right:6px;color:#cbd3e3;font-size:12px}
+  @media (max-width:900px){
+    #wrap{flex-direction:column;align-items:center}
+    #touch{display:block;position:sticky;bottom:0}
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="360" height="720" aria-label="Tetris Game Canvas"></canvas>
+  <div id="side">
+    <div class="card">
+      <h1>Canvas Tetris</h1>
+      <div class="mini">
+        <canvas id="hold" width="120" height="120" title="Hold"></canvas>
+        <canvas id="next" width="120" height="240" title="Next"></canvas>
+      </div>
+      <div style="margin-top:10px">
+        <span class="pill">Score: <span id="sc">0</span></span>
+        <span class="pill">Lines: <span id="ln">0</span></span>
+        <span class="pill">Level: <span id="lv">1</span></span>
+        <span class="pill" id="state">Ready</span>
+      </div>
+      <div style="margin-top:8px" class="k">
+        ⌨️ <b>Keys</b>：←→ 移動 / ↑ 回転 / Z 反転回転 / ↓ ソフト / Space ハード / C ホールド / P 一時停止 / R リスタート
+      </div>
+    </div>
+    <div id="touch" class="card">
+      <h1>Touch</h1>
+      <div class="grid">
+        <div class="btn" data-a="left">◀︎</div>
+        <div class="btn" data-a="rotL">⟲</div>
+        <div class="btn" data-a="rotR">⟳</div>
+        <div class="btn" data-a="hold">HOLD</div>
+        <div class="btn" data-a="pause">⏯</div>
+        <div class="btn" data-a="right">▶︎</div>
+        <div class="btn" data-a="soft">▼</div>
+        <div class="btn" data-a="hard">⤓</div>
+        <div class="btn" data-a="retry">⟲RST</div>
+        <div class="btn" data-a="none"> </div>
+      </div>
+    </div>
+    <div class="card k">
+      高品質ポイント：7バッグ乱数 / SRS壁蹴り / ゴースト / B2B & コンボ / ロック遅延 / 可変落下速度 / 触れるUI / 一枚完結
+    </div>
   </div>
-  <div class="k">BGMは初回操作後に再生可（ブラウザの自動再生制限対策）</div>
 </div>
+
+<script>
+/* ================== Utility & Constants ================== */
+const W = 10, H = 22; // board size (2 hidden rows)
+const VISIBLE_Y = 2;
+const CELL = 32; // pixel per cell for main canvas (scaled via drawing)
+const COLORS = {
+  I:"#4de6ff", J:"#4d6bff", L:"#ff9b4d", O:"#ffd24d", S:"#66e06a", T:"#b673ff", Z:"#ff6767", GHOST:"#3a3f52"
+};
+const PIECES = {
+  I:[ [[0,1],[1,1],[2,1],[3,1]], [[2,0],[2,1],[2,2],[2,3]], [[0,2],[1,2],[2,2],[3,2]], [[1,0],[1,1],[1,2],[1,3]] ],
+  J:[ [[0,0],[0,1],[1,1],[2,1]], [[1,0],[2,0],[1,1],[1,2]], [[0,1],[1,1],[2,1],[2,2]], [[1,0],[1,1],[0,2],[1,2]] ],
+  L:[ [[2,0],[0,1],[1,1],[2,1]], [[1,0],[1,1],[1,2],[2,2]], [[0,1],[1,1],[2,1],[0,2]], [[0,0],[1,0],[1,1],[1,2]] ],
+  O:[ [[1,0],[2,0],[1,1],[2,1]], [[1,0],[2,0],[1,1],[2,1]], [[1,0],[2,0],[1,1],[2,1]], [[1,0],[2,0],[1,1],[2,1]] ],
+  S:[ [[1,0],[2,0],[0,1],[1,1]], [[1,0],[1,1],[2,1],[2,2]], [[1,1],[2,1],[0,2],[1,2]], [[0,0],[0,1],[1,1],[1,2]] ],
+  T:[ [[1,0],[0,1],[1,1],[2,1]], [[1,0],[1,1],[2,1],[1,2]], [[0,1],[1,1],[2,1],[1,2]], [[1,0],[0,1],[1,1],[1,2]] ],
+  Z:[ [[0,0],[1,0],[1,1],[2,1]], [[2,0],[1,1],[2,1],[1,2]], [[0,1],[1,1],[1,2],[2,2]], [[1,0],[0,1],[1,1],[0,2]] ]
+};
+const ORDER = ["I","J","L","O","S","T","Z"];
+const KICKS = {
+  // SRS kicks: from -> to : list of offsets
+  normal: {
+    "0>1":[[0,0],[-1,0],[-1,1],[0,-2],[-1,-2]],
+    "1>0":[[0,0],[1,0],[1,-1],[0,2],[1,2]],
+    "1>2":[[0,0],[1,0],[1,-1],[0,2],[1,2]],
+    "2>1":[[0,0],[-1,0],[-1,1],[0,-2],[-1,-2]],
+    "2>3":[[0,0],[1,0],[1,1],[0,-2],[1,-2]],
+    "3>2":[[0,0],[-1,0],[-1,-1],[0,2],[-1,2]],
+    "3>0":[[0,0],[ -1,0],[ -1,-1],[0,2],[ -1,2]],
+    "0>3":[[0,0],[1,0],[1,1],[0,-2],[1,-2]]
+  },
+  I: {
+    "0>1":[[0,0],[-2,0],[1,0],[-2,-1],[1,2]],
+    "1>0":[[0,0],[2,0],[-1,0],[2,1],[-1,-2]],
+    "1>2":[[0,0],[-1,0],[2,0],[-1,2],[2,-1]],
+    "2>1":[[0,0],[1,0],[-2,0],[1,-2],[-2,1]],
+    "2>3":[[0,0],[2,0],[-1,0],[2,1],[-1,-2]],
+    "3>2":[[0,0],[-2,0],[1,0],[-2,-1],[1,2]],
+    "3>0":[[0,0],[1,0],[-2,0],[1,-2],[-2,1]],
+    "0>3":[[0,0],[-1,0],[2,0],[-1,2],[2,-1]]
+  }
+};
+
+const SCORE_TABLE = {1:100, 2:300, 3:500, 4:800};
+const COMBO_BONUS = 50; // per combo depth
+const B2B_BONUS = 0.5;  // 50% more for B2B
+const LOCK_DELAY_MS = 500;
+const DAS = 120, ARR = 20; // movement auto-shift
+
+/* ================== Game State ================== */
+let board = makeBoard();
+let bag = [];
+let queue = [];
+let hold = null, holdUsed = false;
+let cur = null;
+let gravity = 1000; // ms per row (level affects)
+let level = 1, lines = 0, score = 0;
+let combo = -1, b2b = false;
+let paused = false, gameover = false;
+let lastFall = 0, lastMove = 0;
+let dasDir = 0, dasTimer = 0, arrTimer = 0;
+let lockTimer = null;
+
+const cvs = document.getElementById('game');
+const ctx = cvs.getContext('2d');
+const holdC = document.getElementById('hold').getContext('2d');
+const nextC = document.getElementById('next').getContext('2d');
+const ui = {
+  sc: document.getElementById('sc'),
+  ln: document.getElementById('ln'),
+  lv: document.getElementById('lv'),
+  state: document.getElementById('state')
+};
+
+/* ================== Audio (WebAudio, no assets) ================== */
+const AC = new (window.AudioContext||window.webkitAudioContext)();
+function beep(type=0, dur=0.03, freq=440, gain=0.06){
+  if (AC.state === 'suspended') AC.resume();
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = ['square','sine','triangle'][type%3];
+  o.frequency.value = freq;
+  g.gain.value = gain;
+  o.connect(g).connect(AC.destination);
+  o.start();
+  g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime+dur);
+  o.stop(AC.currentTime+dur);
+}
+const sfx = {
+  move:()=>beep(1,0.02,660,0.03),
+  rotate:()=>beep(2,0.04,780,0.04),
+  hard:()=>beep(0,0.05,220,0.07),
+  lock:()=>beep(1,0.04,330,0.05),
+  line:()=>beep(2,0.08,980,0.06),
+  level:()=>beep(1,0.12,520,0.07),
+  hold:()=>beep(2,0.03,600,0.04),
+  invalid:()=>beep(0,0.05,120,0.04)
+};
+
+/* ================== Init ================== */
+function makeBoard(){ return Array.from({length:H},()=>Array(W).fill(null)); }
+function newBag(){
+  const a = ORDER.slice();
+  for(let i=a.length-1;i>0;i--){const j=(Math.random()* (i+1))|0; [a[i],a[j]]=[a[j],a[i]];}
+  return a;
+}
+function fillQueue(){
+  while(queue.length<5){
+    if(bag.length===0) bag = newBag();
+    queue.push(bag.shift());
+  }
+}
+function spawn(){
+  fillQueue();
+  const type = queue.shift();
+  const rot = 0;
+  const x = 3, y = -2; // spawn above
+  cur = {type, rot, x, y};
+  holdUsed = false;
+  if(collide(cur,0,0)){ gameover = true; ui.state.textContent="Game Over"; }
+}
+function reset(){
+  board = makeBoard();
+  bag=[]; queue=[];
+  hold=null; holdUsed=false;
+  level=1; lines=0; score=0; combo=-1; b2b=false;
+  paused=false; gameover=false;
+  gravity = levelToGravity(level);
+  ui.state.textContent="Ready";
+  spawn();
+}
+
+/* ================== Mechanics ================== */
+function levelToGravity(lv){
+  // approximate speed curve (ms per row)
+  const table=[1000,793,618,473,355,262,190,135,94,66,50,39,30,23,18,14,11,9,7,5];
+  return table[Math.min(lv-1, table.length-1)];
+}
+function cells(piece){
+  const shape = PIECES[piece.type][piece.rot];
+  return shape.map(([dx,dy])=>({x:piece.x+dx,y:piece.y+dy}));
+}
+function collide(piece,dx,dy,rot=null){
+  const p = { ...piece };
+  if(rot!==null) p.rot = rot;
+  p.x += dx; p.y += dy;
+  for(const c of cells(p)){
+    if (c.x<0 || c.x>=W || c.y>=H) return true;
+    if (c.y>=0 && board[c.y][c.x]) return true;
+  }
+  return false;
+}
+function lock(){
+  for(const c of cells(cur)){
+    if (c.y>=0) board[c.y][c.x] = cur.type;
+  }
+  sfx.lock();
+  clearLines();
+  spawn();
+}
+function clearLines(){
+  const full=[];
+  for(let y=0;y<H;y++){
+    if(board[y].every(Boolean)) full.push(y);
+  }
+  if(full.length){
+    // small flash effect
+    sfx.line();
+    const points = SCORE_TABLE[full.length] || 0;
+    const b2bBonus = (full.length===4 && b2b) ? Math.floor(points*B2B_BONUS) : 0;
+    score += points + b2bBonus + Math.max(0,combo)*COMBO_BONUS;
+    lines += full.length;
+    combo++;
+    if(full.length===4){ b2b = true; } else { b2b = false; }
+    for(const y of full){ board.splice(y,1); board.unshift(Array(W).fill(null)); }
+    const lvUp = 1 + Math.floor(lines/10);
+    if(lvUp>level){ level=lvUp; gravity = levelToGravity(level); sfx.level(); }
+    updateUI();
+  } else {
+    combo = -1;
+    updateUI();
+  }
+}
+function updateUI(){
+  ui.sc.textContent = score;
+  ui.ln.textContent = lines;
+  ui.lv.textContent = level;
+}
+
+/* ================== Actions ================== */
+function move(dx){
+  if (paused||gameover) return;
+  if (!collide(cur,dx,0)){ cur.x += dx; sfx.move(); lockReset(); }
+}
+function softDrop(){
+  if (paused||gameover) return;
+  if (!collide(cur,0,1)){ cur.y++; score += 1; lockReset(); }
+  else maybeStartLock();
+}
+function hardDrop(){
+  if (paused||gameover) return;
+  let d=0;
+  while(!collide(cur,0,1)){ cur.y++; d++; }
+  score += d*2;
+  sfx.hard();
+  lock();
+}
+function rotate(dir){ // dir=+1 right, -1 left
+  if (paused||gameover) return;
+  const from = cur.rot;
+  const to = (from + (dir===1?1:3)) % 4;
+  const key = `${from}>${to}`;
+  const table = (cur.type==="I"?KICKS.I:KICKS.normal)[key] || [[0,0]];
+  for(const [kx,ky] of table){
+    if(!collide(cur,kx,ky,to)){
+      cur.x += kx; cur.y += ky; cur.rot = to; sfx.rotate(); lockReset(); return;
+    }
+  }
+  sfx.invalid();
+}
+function holdAction(){
+  if (paused||gameover || holdUsed) { sfx.invalid(); return; }
+  sfx.hold();
+  const t = cur.type;
+  if(hold==null){
+    hold = t;
+    spawn();
+  } else {
+    const tmp = hold; hold = t;
+    cur = {type:tmp, rot:0, x:3, y:-2};
+    if (collide(cur,0,0)) { gameover=true; ui.state.textContent="Game Over"; }
+  }
+  holdUsed = true;
+}
+function lockReset(){
+  if (lockTimer) { clearTimeout(lockTimer); lockTimer=null; }
+}
+function maybeStartLock(){
+  if (!lockTimer) lockTimer = setTimeout(()=>{ lockTimer=null; lock(); }, LOCK_DELAY_MS);
+}
+
+/* ================== Input ================== */
+const key = {};
+document.addEventListener('keydown', (e)=>{
+  if (["ArrowLeft","ArrowRight","ArrowDown","Space","z","Z","x","X","c","C","p","P","r","R","ArrowUp"].includes(e.key)) e.preventDefault();
+  if (e.repeat) return;
+  key[e.key]=true;
+  switch(e.key){
+    case "ArrowLeft": startDAS(-1); break;
+    case "ArrowRight": startDAS(1); break;
+    case "ArrowDown": softDrop(); break;
+    case " ": case "Space": hardDrop(); break;
+    case "x": case "X": case "ArrowUp": rotate(1); break;
+    case "z": case "Z": rotate(-1); break;
+    case "c": case "C": holdAction(); break;
+    case "p": case "P": togglePause(); break;
+    case "r": case "R": reset(); break;
+  }
+});
+document.addEventListener('keyup', (e)=>{
+  key[e.key]=false;
+  if (e.key==="ArrowLeft" && dasDir<0) stopDAS();
+  if (e.key==="ArrowRight" && dasDir>0) stopDAS();
+});
+function startDAS(dir){
+  dasDir = dir;
+  move(dir);
+  dasTimer = performance.now();
+  arrTimer = 0;
+}
+function stopDAS(){
+  dasDir = 0;
+  dasTimer = 0; arrTimer = 0;
+}
+
+/* Touch controls */
+document.querySelectorAll('#touch .btn').forEach(b=>{
+  b.addEventListener('touchstart',e=>{
+    e.preventDefault(); action(b.dataset.a);
+  },{passive:false});
+  b.addEventListener('click',()=>action(b.dataset.a));
+});
+function action(a){
+  if(a==="left") move(-1);
+  if(a==="right") move(1);
+  if(a==="soft") softDrop();
+  if(a==="hard") hardDrop();
+  if(a==="rotL") rotate(-1);
+  if(a==="rotR") rotate(1);
+  if(a==="hold") holdAction();
+  if(a==="pause") togglePause();
+  if(a==="retry") reset();
+}
+
+/* ================== Rendering ================== */
+function drawCell(g,x,y,color,ghost=false,size=CELL){
+  g.fillStyle = ghost? COLORS.GHOST : color;
+  const s = size-1;
+  g.fillRect(x*size+1,y*size+1,s-1,s-1);
+  g.fillStyle = ghost? "rgba(255,255,255,.06)" : "rgba(255,255,255,.12)";
+  g.fillRect(x*size+1,y*size+1,s-1,Math.max(2, s*0.18)); // top shine
+  g.fillStyle = "rgba(0,0,0,.25)";
+  g.fillRect(x*size+1,(y+1)*size-4,s-1,3); // bottom shadow
+}
+function ghostPiece(){
+  let g = {...cur};
+  while(!collide(g,0,1)) g.y++;
+  return g;
+}
+function render(){
+  // main
+  ctx.clearRect(0,0,cvs.width,cvs.height);
+  // background grid
+  for(let y=VISIBLE_Y;y<H;y++){
+    for(let x=0;x<W;x++){
+      ctx.strokeStyle = "rgba(255,255,255,0.04)";
+      ctx.strokeRect(x*CELL,yVisible(y)*CELL,CELL,CELL);
+    }
+  }
+  // board blocks
+  for(let y=VISIBLE_Y;y<H;y++){
+    for(let x=0;x<W;x++){
+      const t = board[y][x];
+      if(t) drawCell(ctx,x,yVisible(y),COLORS[t],false,CELL);
+    }
+  }
+  // ghost
+  const gh = ghostPiece();
+  for(const c of cells(gh)){
+    if (c.y>=VISIBLE_Y) drawCell(ctx,c.x,yVisible(c.y),COLORS.GHOST,true,CELL);
+  }
+  // current
+  for(const c of cells(cur)){
+    if (c.y>=VISIBLE_Y) drawCell(ctx,c.x,yVisible(c.y),COLORS[cur.type],false,CELL);
+  }
+
+  // Hold
+  holdC.fillStyle = "#0b0c10"; holdC.fillRect(0,0,120,120);
+  holdC.fillStyle = "#cbd3e3"; holdC.fillText("HOLD", 8, 14);
+  if(hold) drawMini(holdC, hold, 32, 40);
+
+  // Next (show first 3)
+  nextC.fillStyle = "#0b0c10"; nextC.fillRect(0,0,120,240);
+  nextC.fillStyle = "#cbd3e3"; nextC.fillText("NEXT", 8, 14);
+  for(let i=0;i<3;i++){
+    const t = queue[i];
+    if(t) drawMini(nextC, t, 32, 40 + i*72);
+  }
+}
+function yVisible(y){ return y - VISIBLE_Y; }
+function drawMini(g, type, size, yoff){
+  const shapes = PIECES[type][0];
+  const minx = Math.min(...shapes.map(c=>c[0]));
+  const miny = Math.min(...shapes.map(c=>c[1]));
+  const maxx = Math.max(...shapes.map(c=>c[0]));
+  const maxy = Math.max(...shapes.map(c=>c[1]));
+  const w = (maxx-minx+1), h=(maxy-miny+1);
+  const x0 = Math.floor((120 - w*size)/2/1);
+  const y0 = Math.floor(yoff + (60 - h*size)/2);
+  for(const [dx,dy] of shapes){
+    const x = (dx-minx), y=(dy-miny);
+    drawCell(g,x + x0/size, y + y0/size, COLORS[type], false, size);
+  }
+}
+
+/* ================== Loop ================== */
+function togglePause(){
+  paused = !paused;
+  ui.state.textContent = paused ? "Paused" : "Playing";
+}
+function step(t){
+  requestAnimationFrame(step);
+  if (paused || gameover || !cur) return;
+
+  // gravity
+  if (t - lastFall >= gravity){
+    if (!collide(cur,0,1)){ cur.y++; lockReset(); }
+    else maybeStartLock();
+    lastFall = t;
+  }
+
+  // DAS/ARR
+  if (dasDir!==0){
+    if (dasTimer && t - dasTimer >= DAS){
+      if (!arrTimer || t - arrTimer >= ARR){
+        if (!collide(cur,dasDir,0)){ cur.x += dasDir; lockReset(); sfx.move(); }
+        arrTimer = t;
+      }
+    }
+  }
+
+  render();
+}
+
+/* ================== Start ================== */
+window.addEventListener('load', ()=>{
+  ctx.font = "12px system-ui";
+  holdC.font = "12px system-ui";
+  nextC.font = "12px system-ui";
+  reset();
+  ui.state.textContent="Playing";
+  requestAnimationFrame(step);
+});
+</script>
+</body>
+</html>
